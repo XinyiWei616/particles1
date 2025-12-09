@@ -1,0 +1,19 @@
+body {
+  margin: 0;
+  overflow: hidden;
+  background: #000;
+  color: white;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+canvas {
+  display: block;
+  outline: none;
+}
+
+/* Custom utility for the cinematic overlay */
+.bg-radial-gradient {
+  background: radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.6) 100%);
+}
