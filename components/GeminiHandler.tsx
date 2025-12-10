@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GoogleGenAI, FunctionDeclaration, Type, LiveServerMessage } from '@google/genai';
+import { GestureState } from '../types';
 
 interface GeminiHandlerProps {
-  onGestureChange: (scale: number) => void;
+  onGestureChange: (gesture: GestureState) => void;
   onConnectionChange: (connected: boolean) => void;
 }
 
@@ -15,26 +16,33 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
   // Gemini Configuration
   const MODEL_NAME = 'gemini-2.5-flash-native-audio-preview-09-2025';
 
-  const setHandStateTool: FunctionDeclaration = {
-    name: 'setHandState',
+  const updateHandGestureTool: FunctionDeclaration = {
+    name: 'updateHandGesture',
     parameters: {
       type: Type.OBJECT,
-      description: 'Sets the openness of the user\'s hands. 0.5 is closed/small, 2.0 is wide open/large. 1.0 is neutral.',
+      description: 'Updates the simulation based on user hand gestures.',
       properties: {
-        scale: {
+        openness: {
           type: Type.NUMBER,
-          description: 'A multiplier for the particle system size. Range 0.5 to 2.5.',
+          description: '0.0 represents closed fists/hands together. 1.0 represents open palms/hands spread wide.',
         },
+        x: {
+          type: Type.NUMBER,
+          description: 'Horizontal position of the hands center from -1.0 (left) to 1.0 (right).',
+        },
+        y: {
+          type: Type.NUMBER,
+          description: 'Vertical position of the hands center from -1.0 (bottom) to 1.0 (top).',
+        }
       },
-      required: ['scale'],
+      required: ['openness', 'x', 'y'],
     },
   };
-
   const initWebcam = async () => {
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({ 
         video: { width: 320, height: 240, frameRate: 15 },
-        audio: false // We don't need audio input for this specific visual demo
+        audio: false 
       });
       setStream(mediaStream);
       if (videoRef.current) {
@@ -53,7 +61,6 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
 
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
-    // We utilize the connect method directly as per guidelines
     const sessionPromise = ai.live.connect({
       model: MODEL_NAME,
       callbacks: {
@@ -63,15 +70,17 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
           startVideoStreaming(sessionPromise);
         },
         onmessage: (message: LiveServerMessage) => {
-          // Handle Function Calls
           if (message.toolCall) {
             for (const fc of message.toolCall.functionCalls) {
-              if (fc.name === 'setHandState') {
+              if (fc.name === 'updateHandGesture') {
                 const args = fc.args as any;
-                // console.log("Gesture Detected:", args.scale);
-                onGestureChange(args.scale);
+                // console.log("Gesture:", args);
+                onGestureChange({
+                  openness: args.openness ?? 0.5,
+                  x: args.x ?? 0,
+                  y: args.y ?? 0
+                });
 
-                // Send response back
                 sessionPromise.then(session => {
                   session.sendToolResponse({
                     functionResponses: {
@@ -97,17 +106,26 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
       },
       config: {
         systemInstruction: `
-          You are a visual gesture controller. 
-          Analyze the video stream of the user.
-          Determine if their hands or arms are 'OPEN' (spread apart/big) or 'CLOSED' (hands together/small).
-          
-          If hands are spread wide, call setHandState with scale = 2.0.
-          If hands are together or clenched, call setHandState with scale = 0.5.
-          If hands are in a neutral position, call setHandState with scale = 1.0.
-          
-          Be responsive. React immediately to changes.
+          You are a 3D Particle System Controller utilizing computer vision.
+          Your goal is to control a particle cloud based on the user's hand movements in the video stream.
+
+          1. **Position Tracking (x, y)**:
+             - Identify the centroid (center point) of the user's active hand(s).
+             - Map this position to a coordinate system:
+               - x: -1.0 (Frame Left) to 1.0 (Frame Right).
+               - y: -1.0 (Frame Bottom) to 1.0 (Frame Top).
+             - If the user waves left, x should decrease. If they wave up, y should increase.
+             
+          2. **Openness Tracking (openness)**:
+             - Detect if the hand is OPEN (fingers splayed, palm visible) or CLOSED (fist, or fingers pinched).
+             - Map this to a value:
+               - 0.0: Fully Closed / Fist / Compact.
+               - 1.0: Fully Open / Spread / Expanded.
+               - Use intermediate values (e.g., 0.5) for relaxed states.
+
+          Be extremely responsive. If the hands move, update x/y immediately. If the hand opens/closes, update openness immediately.
         `,
-        tools: [{ functionDeclarations: [setHandStateTool] }],
+        tools: [{ functionDeclarations: [updateHandGestureTool] }],
       }
     });
   };
@@ -117,13 +135,12 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
       const reader = new FileReader();
       reader.onloadend = () => {
         const dataUrl = reader.result as string;
-        // Remove "data:image/jpeg;base64," prefix
         const base64 = dataUrl.split(',')[1]; 
         resolve(base64);
       };
       reader.readAsDataURL(blob);
     });
-  };
+     };
 
   const startVideoStreaming = (sessionPromise: Promise<any>) => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -132,8 +149,7 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
     const ctx = canvas.getContext('2d');
     const video = videoRef.current;
 
-    // Send a frame every 500ms (2 FPS) to balance latency and token usage/rate limits
-    // Real-time interaction needs to be balanced against quota.
+    // 3 FPS (330ms) for better responsiveness while maintaining stability
     frameIntervalRef.current = window.setInterval(async () => {
       if (video.readyState === 4 && ctx) {
         canvas.width = video.videoWidth;
@@ -152,12 +168,11 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
               });
             }).catch(e => console.error("Session send error", e));
           }
-        }, 'image/jpeg', 0.5); // Low quality JPEG for speed
+        }, 'image/jpeg', 0.5); 
       }
-    }, 500); 
+    }, 330); 
   };
-
-  const stopVideoStreaming = () => {
+const stopVideoStreaming = () => {
     if (frameIntervalRef.current) {
       clearInterval(frameIntervalRef.current);
       frameIntervalRef.current = null;
@@ -166,7 +181,7 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
 
   useEffect(() => {
     initWebcam();
-    connectToGemini(); // Auto connect on mount
+    connectToGemini();
     return () => {
       stopVideoStreaming();
     };
@@ -175,10 +190,8 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
 
   return (
     <div className="absolute bottom-4 left-4 z-50 pointer-events-none opacity-80">
-       {/* Hidden calculation canvas */}
        <canvas ref={canvasRef} className="hidden" />
        
-       {/* Visual feedback of what camera sees */}
        <div className="relative rounded-lg overflow-hidden border-2 border-white/20 shadow-lg w-32 h-24 bg-black">
           <video 
             ref={videoRef} 
@@ -193,6 +206,6 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
        </div>
     </div>
   );
-};
+  };
 
-export default GeminiHandler;
+export default GeminiHandler
