@@ -11,10 +11,20 @@ const Particles: React.FC<ParticleProps> = ({ count, shape, color, gesture }) =>
   const currentPositions = useMemo(() => new Float32Array(count * 3), [count]);
   const targetPositions = useMemo(() => generateTargetPositions(count, shape), [count, shape]);
   
+  // Create random scatter vectors for the explosion effect (Open Hand)
+  const scatterVectors = useMemo(() => {
+    const arr = new Float32Array(count * 3);
+    for(let i=0; i<count*3; i++) {
+        // Normalized random vector
+        arr[i] = (Math.random() - 0.5) * 2; 
+    }
+    return arr;
+  }, [count]);
+
   // Internal state for smooth interpolation
   const smoothedGesture = useRef({ openness: 0.5, x: 0, y: 0 });
 
-  // Initialize
+  // Initialize positions
   useMemo(() => {
     for (let i = 0; i < count * 3; i++) {
       currentPositions[i] = targetPositions[i];
@@ -28,72 +38,82 @@ const Particles: React.FC<ParticleProps> = ({ count, shape, color, gesture }) =>
   useEffect(() => {
     uniforms.uColor.value.set(color);
   }, [color, uniforms]);
-
   useFrame((state) => {
     if (!pointsRef.current) return;
 
-    // 1. Smooth the gesture inputs (Lerp)
-    const lerpFactor = 0.1;
+    // 1. Smooth Gesture Input (Lerp)
+    // A lower factor makes it smoother/sluggish, higher makes it snappier
+    const lerpFactor = 0.1; 
     smoothedGesture.current.openness += (gesture.openness - smoothedGesture.current.openness) * lerpFactor;
     
-    // Invert X because webcam is mirrored usually (or user moves left, looks right on screen)
-    // Actually, if we use standard mapping: -1 is left. 
-     // Let's assume intuitive control: Move hand Left -> Particles Left.
-    const targetX = gesture.x; 
-    const targetY = gesture.y;
-    
-    smoothedGesture.current.x += (targetX - smoothedGesture.current.x) * lerpFactor;
-    smoothedGesture.current.y += (targetY - smoothedGesture.current.y) * lerpFactor;
+    // Smooth position (X, Y)
+    smoothedGesture.current.x += (gesture.x - smoothedGesture.current.x) * lerpFactor;
+    smoothedGesture.current.y += (gesture.y - smoothedGesture.current.y) * lerpFactor;
 
     const geometry = pointsRef.current.geometry;
     const positionAttribute = geometry.attributes.position;
-
-    // 2. Physics Constants
-    const baseScale = 0.2; // Minimum size (when closed)
-    const expansionRange = 2.0; // How much it grows
-    const currentScale = baseScale + (smoothedGesture.current.openness * expansionRange);
     
-    // Map -1..1 to World Units (e.g., -10 to 10)
-    const worldX = smoothedGesture.current.x * 12; 
-    const worldY = smoothedGesture.current.y * 6;
+    // Physics Parameters
+    const openVal = smoothedGesture.current.openness; // 0.0 (Closed) to 1.0 (Open)
+    
+    // World Translation based on Hand Position
+    // Map -1..1 to world units (e.g. -15..15)
+    const handX = smoothedGesture.current.x * 15;
+    const handY = smoothedGesture.current.y * 10;
 
-    // Shape morph speed
-    const morphSpeed = 0.05;
+    // Scattering Physics
+    // When Open (1.0): Particles should explode/scatter OUTWARDS from the shape.
+    // When Closed (0.0): Particles should tightly converge to the shape `targetPositions`.
+    
+    const scatterMagnitude = openVal * 6.0; // How far they fly apart
+    const shapeScale = 1.0 + (openVal * 1.5); // The base shape also grows
+    
+    // Morph speed for shape switching
+    const morphSpeed = 0.08;
+    
     const time = state.clock.elapsedTime;
 
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
-    // A. Morph logical position towards selected shape
+            // A. Update Logical Base Position (Morphing between shapes)
       const tx = targetPositions[i3];
       const ty = targetPositions[i3 + 1];
       const tz = targetPositions[i3 + 2];
 
+      // Lerp current base position towards new shape target
       currentPositions[i3] += (tx - currentPositions[i3]) * morphSpeed;
       currentPositions[i3 + 1] += (ty - currentPositions[i3 + 1]) * morphSpeed;
       currentPositions[i3 + 2] += (tz - currentPositions[i3 + 2]) * morphSpeed;
 
-      // B. Apply Scale (Openness) + Translation (Hand Position) + Noise
-      // We calculate the final visual position here without modifying the base logic buffers too much
+      // B. Calculate Final Render Position
+      // Formula: (BasePos * Scale) + (ScatterDirection * Magnitude) + HandOffset + Noise
       
-      // Add a little organic noise that increases when open
-      const noiseAmp = smoothedGesture.current.openness * 0.2;
-      const noiseX = Math.sin(time * 2 + i) * noiseAmp;
-      const noiseY = Math.cos(time * 3 + i) * noiseAmp;
-      const noiseZ = Math.sin(time * 4 + i) * noiseAmp;
+      const baseX = currentPositions[i3];
+      const baseY = currentPositions[i3 + 1];
+      const baseZ = currentPositions[i3 + 2];
+
+      // Scatter vector
+      const sx = scatterVectors[i3];
+      const sy = scatterVectors[i3 + 1];
+      const sz = scatterVectors[i3 + 2];
+
+      // Organic Noise (breathing effect)
+      const noise = Math.sin(time * 2 + i) * (0.05 + openVal * 0.2);
 
       positionAttribute.setXYZ(
         i,
-        (currentPositions[i3] * currentScale) + worldX + noiseX,
-        (currentPositions[i3 + 1] * currentScale) + worldY + noiseY,
-        (currentPositions[i3 + 2] * currentScale) + noiseZ
+        (baseX * shapeScale) + (sx * scatterMagnitude) + handX + noise,
+        (baseY * shapeScale) + (sy * scatterMagnitude) + handY + noise,
+        (baseZ * shapeScale) + (sz * scatterMagnitude)
       );
     }
 
     positionAttribute.needsUpdate = true;
     
-    // Slight overall rotation for style
+    // Rotate the whole system slightly for 3D depth perception
     pointsRef.current.rotation.y = time * 0.1;
-  });
+    pointsRef.current.rotation.z = smoothedGesture.current.x * 0.2; // Tilt with movement
+            });
 
   return (
     <points ref={pointsRef}>
@@ -106,7 +126,7 @@ const Particles: React.FC<ParticleProps> = ({ count, shape, color, gesture }) =>
         />
       </bufferGeometry>
       <pointsMaterial
-        size={0.15}
+        size={0.12}
         color={color}
         transparent
         opacity={0.8}
