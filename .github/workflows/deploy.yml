@@ -1,0 +1,53 @@
+# 工作流名称
+name: Deploy React/TSX to GitHub Pages
+
+# 触发条件：当代码推送到 main 分支时运行
+on:
+  push:
+    branches: ["main"]
+
+# 允许 GITHUB_TOKEN 有写权限来部署 Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 定义工作流的步骤
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest # 在最新的 Ubuntu 虚拟机上运行
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # 1. 检出代码 (下载你的仓库代码到虚拟机)
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. 设置 Node.js 环境 (安装 Node.js)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # 使用推荐的 Node.js 版本
+
+      # 3. 安装依赖 (运行 npm install)
+      - name: Install Dependencies
+        run: npm install
+
+      # 4. 构建项目 (运行 npm run build，生成 dist 文件夹)
+      - name: Build Project
+        run: npm run build
+
+      # 5. 设置 Pages Artifact (将 dist 文件夹的内容打包)
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        with:
+          static_site_generator: custom
+          # 假设你的构建输出文件夹是 dist
+          out_directory: dist 
+
+      # 6. 部署到 GitHub Pages
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
