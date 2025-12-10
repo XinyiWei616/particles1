@@ -4,24 +4,18 @@ import { OrbitControls, Stars } from '@react-three/drei';
 import Particles from './components/Particles';
 import UIControls from './components/UIControls';
 import GeminiHandler from './components/GeminiHandler';
-import { ShapeType } from './types';
+import { ShapeType, GestureState } from './types';
 
 const App: React.FC = () => {
   const [shape, setShape] = useState<ShapeType>(ShapeType.HEART);
   const [color, setColor] = useState<string>('#ff0066');
-  const [gestureScale, setGestureScale] = useState<number>(1.0);
+  const [gesture, setGesture] = useState<GestureState>({ openness: 0.5, x: 0, y: 0 });
   const [isAiConnected, setIsAiConnected] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Smooth out the scale updates slightly in React state, 
-  // though the heavy lifting is in the 3D loop.
-  const handleGestureChange = useCallback((newScale: number) => {
-    // Clamp values
-    const clamped = Math.min(Math.max(newScale, 0.5), 2.5);
-    setGestureScale(prev => {
-      // Simple easing towards target
-      return prev + (clamped - prev) * 0.3;
-    });
+  const handleGestureChange = useCallback((newGesture: GestureState) => {
+    // We update state. The visual smoothing happens inside Particles.tsx via lerping
+    setGesture(newGesture);
   }, []);
 
   const handleToggleFullscreen = () => {
@@ -39,31 +33,30 @@ const App: React.FC = () => {
       
       {/* 3D Scene */}
       <div className="absolute inset-0">
-        <Canvas camera={{ position: [0, 0, 20], fov: 60 }}>
+        <Canvas camera={{ position: [0, 0, 25], fov: 60 }}>
           <color attach="background" args={['#050505']} />
           <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
           <ambientLight intensity={0.5} />
           <pointLight position={[10, 10, 10]} intensity={1} />
-          
-          <Particles 
-            count={6000} 
+
+           <Particles 
+            count={8000} 
             shape={shape} 
             color={color} 
-            gestureScale={gestureScale} 
+            gesture={gesture} 
           />
           
           <OrbitControls 
             enableZoom={true} 
             enablePan={false} 
-            autoRotate={true}
-            autoRotateSpeed={0.5}
+            autoRotate={false} /* Disabled auto rotate to make hand tracking clearer */
             maxDistance={50}
             minDistance={5}
           />
         </Canvas>
       </div>
 
-      {/* AI Vision Handler (Invisible Logic + Camera Preview) */}
+      {/* AI Vision Handler */}
       <GeminiHandler 
         onGestureChange={handleGestureChange} 
         onConnectionChange={setIsAiConnected}
@@ -80,7 +73,7 @@ const App: React.FC = () => {
       />
       
       {/* Overlay Gradient for cinematics */}
-      <div className="absolute inset-0 pointer-events-none bg-radial-gradient from-transparent to-black/60" />
+       <div className="absolute inset-0 pointer-events-none bg-radial-gradient from-transparent to-black/60" />
     </div>
   );
 };
