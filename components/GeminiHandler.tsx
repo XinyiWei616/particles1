@@ -20,19 +20,19 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
     name: 'updateHandGesture',
     parameters: {
       type: Type.OBJECT,
-      description: 'Updates the simulation based on user hand gestures.',
+      description: 'Updates the particle simulation based on user hand gestures detected in the video.',
       properties: {
         openness: {
           type: Type.NUMBER,
-          description: '0.0 represents closed fists/hands together. 1.0 represents open palms/hands spread wide.',
+          description: '0.0 for closed fist/contracted hand. 1.0 for fully open palm/spread fingers.',
         },
         x: {
           type: Type.NUMBER,
-          description: 'Horizontal position of the hands center from -1.0 (left) to 1.0 (right).',
+          description: 'Horizontal position of the hand center. -1.0 is Left, 1.0 is Right.',
         },
         y: {
           type: Type.NUMBER,
-          description: 'Vertical position of the hands center from -1.0 (bottom) to 1.0 (top).',
+          description: 'Vertical position of the hand center. -1.0 is Bottom, 1.0 is Top.',
         }
       },
       required: ['openness', 'x', 'y'],
@@ -41,7 +41,11 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
   const initWebcam = async () => {
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-        video: { width: 320, height: 240, frameRate: 15 },
+        video: { 
+          width: { ideal: 320 }, 
+          height: { ideal: 240 }, 
+          frameRate: { ideal: 15 } 
+        },
         audio: false 
       });
       setStream(mediaStream);
@@ -71,16 +75,15 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
         },
         onmessage: (message: LiveServerMessage) => {
           if (message.toolCall) {
-            for (const fc of message.toolCall.functionCalls) {
-              if (fc.name === 'updateHandGesture') {
-                const args = fc.args as any;
-                // console.log("Gesture:", args);
+            fc.args as any;
+                
                 onGestureChange({
-                  openness: args.openness ?? 0.5,
-                  x: args.x ?? 0,
-                  y: args.y ?? 0
+                  openness: typeof args.openness === 'number' ? args.openness : 0.5,
+                  x: typeof args.x === 'number' ? args.x : 0,
+                  y: typeof args.y === 'number' ? args.y : 0
                 });
 
+                // Acknowledge the tool call to keep the session healthy
                 sessionPromise.then(session => {
                   session.sendToolResponse({
                     functionResponses: {
@@ -101,36 +104,40 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
         },
         onerror: (err) => {
           console.error("Gemini Live Error:", err);
-          onConnectionChange(false);
+  onConnectionChange(false);
         }
       },
       config: {
         systemInstruction: `
-          You are a 3D Particle System Controller utilizing computer vision.
-          Your goal is to control a particle cloud based on the user's hand movements in the video stream.
+          You are the Vision Engine for a real-time Interactive Particle System.
+          
+          TASK:
+          Analyze the user's video feed to control 3D particles.
+          You MUST call the \`updateHandGesture\` tool for every visual update.
 
-          1. **Position Tracking (x, y)**:
-             - Identify the centroid (center point) of the user's active hand(s).
-             - Map this position to a coordinate system:
-               - x: -1.0 (Frame Left) to 1.0 (Frame Right).
-               - y: -1.0 (Frame Bottom) to 1.0 (Frame Top).
-             - If the user waves left, x should decrease. If they wave up, y should increase.
-             
-          2. **Openness Tracking (openness)**:
-             - Detect if the hand is OPEN (fingers splayed, palm visible) or CLOSED (fist, or fingers pinched).
-             - Map this to a value:
-               - 0.0: Fully Closed / Fist / Compact.
-               - 1.0: Fully Open / Spread / Expanded.
-               - Use intermediate values (e.g., 0.5) for relaxed states.
+          CONTROL LOGIC:
+          1. **Position (X, Y)**: 
+             - Detect the center of the user's hand(s).
+             - Map horizontal position to X: -1.0 (Screen Left) to 1.0 (Screen Right).
+             - Map vertical position to Y: -1.0 (Screen Bottom) to 1.0 (Screen Top).
+             - Note: The webcam is mirrored. If the user moves physically left, it appears on the right of the frame. 
+               Correct this so that moving the hand LEFT results in X < 0.
 
-          Be extremely responsive. If the hands move, update x/y immediately. If the hand opens/closes, update openness immediately.
+          2. **Openness**:
+             - **Scattering (Open Hand)**: If the palm is open and fingers are spread, set \`openness\` to 1.0.
+             - **Gathering (Closed Hand)**: If the hand is a fist or fingers are pinched together, set \`openness\` to 0.0.
+             - Interpolate smoothly between 0.0 and 1.0 for relaxed hands.
+
+           responsiveness:
+          - Be extremely fast.
+          - If the hand moves, update X/Y immediately.
+          - If the hand opens/closes, update openness immediately.
         `,
         tools: [{ functionDeclarations: [updateHandGestureTool] }],
       }
     });
   };
-
-  const blobToBase64 = (blob: Blob): Promise<string> => {
+const blobToBase64 = (blob: Blob): Promise<string> => {
     return new Promise((resolve, _) => {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -140,7 +147,7 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
       };
       reader.readAsDataURL(blob);
     });
-     };
+  };
 
   const startVideoStreaming = (sessionPromise: Promise<any>) => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -149,7 +156,7 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
     const ctx = canvas.getContext('2d');
     const video = videoRef.current;
 
-    // 3 FPS (330ms) for better responsiveness while maintaining stability
+    // Send frames at ~3-4 FPS to balance latency and rate limits
     frameIntervalRef.current = window.setInterval(async () => {
       if (video.readyState === 4 && ctx) {
         canvas.width = video.videoWidth;
@@ -168,11 +175,12 @@ const GeminiHandler: React.FC<GeminiHandlerProps> = ({ onGestureChange, onConnec
               });
             }).catch(e => console.error("Session send error", e));
           }
-        }, 'image/jpeg', 0.5); 
+           }, 'image/jpeg', 0.5); 
       }
-    }, 330); 
+    }, 300); 
   };
-const stopVideoStreaming = () => {
+
+  const stopVideoStreaming = () => {
     if (frameIntervalRef.current) {
       clearInterval(frameIntervalRef.current);
       frameIntervalRef.current = null;
@@ -190,22 +198,27 @@ const stopVideoStreaming = () => {
 
   return (
     <div className="absolute bottom-4 left-4 z-50 pointer-events-none opacity-80">
+       {/* Hidden Canvas for processing */}
        <canvas ref={canvasRef} className="hidden" />
        
-       <div className="relative rounded-lg overflow-hidden border-2 border-white/20 shadow-lg w-32 h-24 bg-black">
+       {/* UI for Self-View */}
+       <div className="relative rounded-lg overflow-hidden border-2 border-white/20 shadow-lg w-32 h-24 bg-black/80 backdrop-blur">
           <video 
             ref={videoRef} 
             autoPlay 
             playsInline 
-            muted 
+             muted 
             className="w-full h-full object-cover transform scale-x-[-1]" 
           />
-          <div className="absolute top-1 right-1">
-             <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+          <div className="absolute top-1 right-1 flex gap-1">
+             <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></div>
+          </div>
+          <div className="absolute bottom-0 w-full text-[8px] text-center text-white/70 bg-black/50 py-0.5">
+            Gesture Input
           </div>
        </div>
     </div>
   );
-  };
+};
 
-export default GeminiHandler
+export default GeminiHandler;
